@@ -13,18 +13,28 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -36,7 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,10 +58,15 @@ import com.swipesquad.memory.ui.theme.MemoryTheme
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+//    TODO:
+//    - Make pair cards in a scrollable view
+//    - Implement sendLogbookIntent function to the send button with correct json structure
+//    - Make the current highlighted qr code visible with color or some other ui feature
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val selectedImageUri = mutableStateOf<Uri?>(null)
-        val scannedQrValue = mutableStateOf<String?>(null)
+        val allScans = mutableStateListOf<QRItem>()
+        val pairs = mutableStateListOf<List<QRItem>>()
+        val selected = mutableStateListOf<QRItem>()
 
         val qrLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -66,9 +81,12 @@ class MainActivity : ComponentActivity() {
                 }
                 val qrCodeValue = data?.getStringExtra("qr_code_value")
 
-                if (imageUri != null) selectedImageUri.value = imageUri
-                if (qrCodeValue != null) scannedQrValue.value = qrCodeValue
-                Toast.makeText(this, "QR: $imageUri", Toast.LENGTH_LONG).show()
+                if (imageUri != null && qrCodeValue != null) {
+                    val item = QRItem(imageUri, qrCodeValue)
+                    allScans.add(item)
+                }
+
+                Toast.makeText(this, "New scan added", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -95,8 +113,20 @@ class MainActivity : ComponentActivity() {
                         requestCameraPermission = {
                             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         },
-                        imageUri = selectedImageUri.value,
-                        qrValue = scannedQrValue.value
+                        allScans = allScans,
+                        pairs = pairs,
+                        onSelect = { item ->
+                            selected.add(item)
+                            if (selected.size == 2) {
+                                pairs.add(selected.toList())
+                                allScans.removeAll(selected)
+                                selected.clear()
+                            }
+                        },
+                        onDeletePair = { pair ->
+                            pairs.remove(pair)
+                            allScans.addAll(pair)
+                        }
                     )
                 }
             }
@@ -133,8 +163,10 @@ fun sendLogbookIntent(context: Context, value: String) {
 @Composable
 fun MainScreen(
     requestCameraPermission: () -> Unit,
-    imageUri: Uri?,
-    qrValue: String?
+    allScans: List<QRItem>,
+    pairs: List<List<QRItem>>,
+    onSelect: (QRItem) -> Unit,
+    onDeletePair: (List<QRItem>) -> Unit
 ) {
     Scaffold(
         topBar = { Header() },
@@ -151,9 +183,14 @@ fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.TopCenter
         ) {
-            PhotoPreviewScreen(imageUri, qrValue)
+            ScanGallery(
+                allScans = allScans,
+                pairs = pairs,
+                onSelect = onSelect,
+                onDeletePair = onDeletePair,
+            )
         }
     }
 }
@@ -177,6 +214,117 @@ fun Header() {
             }
         }
     )
+}
+
+@Composable
+fun ScanGallery(
+    allScans: List<QRItem>,
+    pairs: List<List<QRItem>>,
+    onSelect: (QRItem) -> Unit,
+    onDeletePair: (List<QRItem>) -> Unit
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "Pairs:",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        pairs.forEachIndexed { index, pair ->
+            Column(modifier = Modifier.padding(bottom = 16.dp)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Pair ${index + 1}",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding( 12.dp).padding(bottom = 4.dp)
+                            )
+                            IconButton(onClick = { onDeletePair(pair) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete pair",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.padding(12.dp)
+                        ) {
+                            pair.forEach { item ->
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    AsyncImage(
+                                        model = item.uri,
+                                        contentDescription = item.value,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 180.dp)
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = item.value,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "Unpaired QR-Codes:",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            items(allScans) { item ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .width(160.dp)
+                        .clickable { onSelect(item) }
+                ) {
+                    AsyncImage(
+                        model = item.uri,
+                        contentDescription = item.value,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 180.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = item.value,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -219,8 +367,10 @@ fun MainScreenPreview() {
         ) {
             MainScreen(
                 requestCameraPermission = TODO(),
-                imageUri = TODO(),
-                qrValue = TODO()
+                allScans = TODO(),
+                pairs = TODO(),
+                onSelect = TODO(),
+                onDeletePair = TODO()
             )
         }
     }
