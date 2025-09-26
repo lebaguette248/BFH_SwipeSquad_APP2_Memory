@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,13 +27,17 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,30 +48,33 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.swipesquad.memory.ui.theme.MemoryTheme
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
-//    TODO:
-//    - Make pair cards in a scrollable view
-//    - Implement sendLogbookIntent function to the send button with correct json structure
-//    - Make the current highlighted qr code visible with color or some other ui feature
-
     override fun onCreate(savedInstanceState: Bundle?) {
-        val allScans = mutableStateListOf<QRItem>()
+        val allScans =  mutableStateListOf<QRItem>()
         val pairs = mutableStateListOf<List<QRItem>>()
-        val selected = mutableStateListOf<QRItem>()
+        val selected = mutableStateOf<QRItem?>(null)
+        var showDialog by mutableStateOf(false)
 
         val qrLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
@@ -104,6 +112,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
+            val context = LocalContext.current
             MemoryTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -115,18 +124,33 @@ class MainActivity : ComponentActivity() {
                         },
                         allScans = allScans,
                         pairs = pairs,
+                        selected = selected.value,
                         onSelect = { item ->
-                            selected.add(item)
-                            if (selected.size == 2) {
-                                pairs.add(selected.toList())
-                                allScans.removeAll(selected)
-                                selected.clear()
+                            if (selected.value == null) {
+                                selected.value = item
+                            } else {
+                                pairs.add(listOf(selected.value!!, item))
+                                allScans.removeAll(listOf(selected.value!!, item))
+                                selected.value = null
                             }
                         },
                         onDeletePair = { pair ->
                             pairs.remove(pair)
                             allScans.addAll(pair)
+                        },
+                        onSendButton = {
+                            showDialog = true
                         }
+                    )
+                }
+                if (showDialog) {
+                    InputPopup(
+                        title = "Is this value correct?",
+                        onDismiss = { showDialog = false },
+                        onConfirm = { input ->
+                            sendLogbookIntent(context, input)
+                        },
+                        initialText = pairs.toJsonArray()
                     )
                 }
             }
@@ -143,12 +167,8 @@ class MainActivity : ComponentActivity() {
 }
 
 fun sendLogbookIntent(context: Context, value: String) {
-    val log = JSONObject()
-    log.put("task", "Metalldetektor")
-    log.put("solution", value)
-
     val intent = Intent("ch.apprun.intent.LOG").apply {
-        putExtra("ch.apprun.logmessage", log.toString())
+        putExtra("ch.apprun.logmessage", value)
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
     }
 
@@ -159,6 +179,50 @@ fun sendLogbookIntent(context: Context, value: String) {
     }
 }
 
+fun createJsonObject(value: JSONArray): String {
+    val log = JSONObject()
+    log.put("task", "Memory")
+    log.put("solution", value)
+
+    return log.toString()
+}
+
+@Composable
+fun InputPopup(
+    title: String = "Enter value",
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    initialText: JSONArray
+) {
+    var text by remember { mutableStateOf(createJsonObject(initialText)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = title) },
+        text = {
+            TextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text("Type something...") }
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(text)
+                    onDismiss()
+                }
+            ) {
+                Text("OK")
+            }
+        },
+        dismissButton = {
+            Button(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
 
 @Composable
 fun MainScreen(
@@ -166,10 +230,14 @@ fun MainScreen(
     allScans: List<QRItem>,
     pairs: List<List<QRItem>>,
     onSelect: (QRItem) -> Unit,
-    onDeletePair: (List<QRItem>) -> Unit
+    onDeletePair: (List<QRItem>) -> Unit,
+    selected: QRItem?,
+    onSendButton: () -> Unit
 ) {
     Scaffold(
-        topBar = { Header() },
+        topBar = { Header(
+            onSendButton = onSendButton
+        ) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { requestCameraPermission() },
@@ -188,6 +256,7 @@ fun MainScreen(
             ScanGallery(
                 allScans = allScans,
                 pairs = pairs,
+                selected = selected,
                 onSelect = onSelect,
                 onDeletePair = onDeletePair,
             )
@@ -197,7 +266,9 @@ fun MainScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Header() {
+fun Header(
+    onSendButton: () -> Unit
+) {
     TopAppBar(
         title = { Text("Memory") },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -205,7 +276,7 @@ fun Header() {
             titleContentColor = MaterialTheme.colorScheme.primary
         ),
         actions = {
-            IconButton(onClick = { /* TODO: handle action */ }) {
+            IconButton(onClick = onSendButton) {
                 Icon(
                     tint = MaterialTheme.colorScheme.primary,
                     imageVector = Icons.AutoMirrored.Filled.Send,
@@ -220,6 +291,7 @@ fun Header() {
 fun ScanGallery(
     allScans: List<QRItem>,
     pairs: List<List<QRItem>>,
+    selected: QRItem?,
     onSelect: (QRItem) -> Unit,
     onDeletePair: (List<QRItem>) -> Unit
 ) {
@@ -230,59 +302,66 @@ fun ScanGallery(
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        pairs.forEachIndexed { index, pair ->
-            Column(modifier = Modifier.padding(bottom = 16.dp)) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Pair ${index + 1}",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding( 12.dp).padding(bottom = 4.dp)
-                            )
-                            IconButton(onClick = { onDeletePair(pair) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete pair",
-                                    tint = MaterialTheme.colorScheme.error
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true)
+        ) {
+            itemsIndexed(pairs) { index, pair ->
+                Column {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Pair ${index + 1}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding( 12.dp).padding(bottom = 4.dp)
                                 )
+                                IconButton(onClick = { onDeletePair(pair) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete pair",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.padding(12.dp)
-                        ) {
-                            pair.forEach { item ->
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    AsyncImage(
-                                        model = item.uri,
-                                        contentDescription = item.value,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = 180.dp)
-                                            .clip(RoundedCornerShape(8.dp)),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = item.value,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                pair.forEach { item ->
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        AsyncImage(
+                                            model = item.uri,
+                                            contentDescription = item.value,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 180.dp)
+                                                .clip(RoundedCornerShape(8.dp)),
+                                            contentScale = ContentScale.Fit
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = item.value,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -291,21 +370,30 @@ fun ScanGallery(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Unpaired QR-Codes:",
+            text = "Unpaired scans:",
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             items(allScans) { item ->
+                val isSelected = item == selected
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .width(160.dp)
                         .clickable { onSelect(item) }
+                        .then(
+                            if (isSelected) Modifier.border(
+                                width = 3.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = RoundedCornerShape(12.dp)
+                            ) else Modifier
+                        )
+                        .padding(4.dp)
                 ) {
                     AsyncImage(
                         model = item.uri,
@@ -370,7 +458,9 @@ fun MainScreenPreview() {
                 allScans = TODO(),
                 pairs = TODO(),
                 onSelect = TODO(),
-                onDeletePair = TODO()
+                onDeletePair = TODO(),
+                selected = TODO(),
+                onSendButton = TODO(),
             )
         }
     }
